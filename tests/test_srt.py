@@ -38,6 +38,20 @@ def test_render_standard_srt_preserves_cue_id() -> None:
     assert output == "12\n00:00:01,000 --> 00:00:02,000\nHi\nthere\n"
 
 
+def test_parse_inline_text_after_speaker_metadata() -> None:
+    """Inline text after speaker metadata is treated as cue text."""
+    cues = parse_srt(
+        "00:00:00,080 --> 00:00:04,520 [Speaker 0] [Wind noises]\n\n"
+        "00:00:07,160 --> 00:00:09,320 [Speaker 0] Hello\n"
+        "there\n"
+    )
+
+    assert cues[0].timing == "00:00:00,080 --> 00:00:04,520 [Speaker 0]"
+    assert cues[0].text_lines == ("[Wind noises]",)
+    assert cues[1].timing == "00:00:07,160 --> 00:00:09,320 [Speaker 0]"
+    assert cues[1].text_lines == ("Hello", "there")
+
+
 def test_replace_cue_text_substitutes_translation() -> None:
     """Cue text replacement keeps cue metadata intact."""
     cues = (

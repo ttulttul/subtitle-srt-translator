@@ -3,7 +3,7 @@ name = "subtitle-srt-translator"
 version = "0.1.0"
 description = "Translate SRT subtitle files with OpenAI Responses API structured outputs."
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.12,<3.13"
 dependencies = [
     "openai>=2.0.0",
     "pydantic>=2.7.0",
@@ -26,4 +26,3 @@ packages = ["src/subtitle_srt_translator"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["src"]

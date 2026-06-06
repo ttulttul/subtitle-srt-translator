@@ -13,6 +13,11 @@ logger = logging.getLogger(__name__)
 TIMING_RE = re.compile(
     r"^\d{2}:\d{2}:\d{2},\d{3}\s+-->\s+\d{2}:\d{2}:\d{2},\d{3}(?:\s+.*)?$"
 )
+TIMING_WITH_INLINE_TEXT_RE = re.compile(
+    r"^(?P<timing>\d{2}:\d{2}:\d{2},\d{3}\s+-->\s+"
+    r"\d{2}:\d{2}:\d{2},\d{3}\s+\[Speaker\s+\d+\])"
+    r"\s+(?P<text>.+)$"
+)
 
 
 def read_srt(path: Path) -> tuple[SubtitleCue, ...]:
@@ -90,7 +95,12 @@ def _parse_block(lines: list[str], fallback_index: int) -> SubtitleCue:
         logger.error(message)
         raise ValueError(message)
 
-    text_lines = tuple(lines[timing_line_index + 1 :])
+    timing, inline_text = _split_timing_and_inline_text(lines[timing_line_index])
+    body_lines = lines[timing_line_index + 1 :]
+    if inline_text is not None:
+        body_lines = [inline_text, *body_lines]
+
+    text_lines = tuple(body_lines)
     if not text_lines:
         logger.warning("Cue %d has no subtitle text", fallback_index)
 
@@ -101,6 +111,14 @@ def _parse_block(lines: list[str], fallback_index: int) -> SubtitleCue:
     return SubtitleCue(
         index=parsed_index,
         cue_id=cue_id,
-        timing=lines[timing_line_index],
+        timing=timing,
         text_lines=text_lines,
     )
+
+
+def _split_timing_and_inline_text(timing_line: str) -> tuple[str, str | None]:
+    """Split inline caption text from timing lines with speaker metadata."""
+    match = TIMING_WITH_INLINE_TEXT_RE.match(timing_line)
+    if match is None:
+        return timing_line, None
+    return match.group("timing"), match.group("text")

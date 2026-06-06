@@ -6,6 +6,9 @@ The CLI reads an SRT file, translates subtitle cues in overlapping chunks, and r
 
 ## Install
 
+This project is pinned to Python 3.12 because Python 3.13 on this Mac skips the
+hidden `.pth` file that uv uses for editable local installs.
+
 ```bash
 uv sync
 ```
