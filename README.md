@@ -6,8 +6,7 @@ The CLI reads an SRT file, translates subtitle cues in overlapping chunks, and r
 
 ## Install
 
-This project is pinned to Python 3.12 because Python 3.13 on this Mac skips the
-hidden `.pth` file that uv uses for editable local installs.
+This project supports Python 3.11 through 3.15.
 
 ```bash
 uv sync
@@ -48,6 +47,13 @@ When `--output` is omitted, the translated SRT is written to stdout.
 
 ```bash
 uv run pytest
+```
+
+To validate the supported Python range locally for the interpreters available
+to uv:
+
+```bash
+uv run python scripts/test_python_versions.py 3.11 3.12 3.13 3.14 --skip-missing
 ```
 
 For live smoke tests, use a tiny SRT sample first. Full subtitle files can produce many parallel model requests depending on `--chunk-size`, `--overlap`, and `--parallelism`.
