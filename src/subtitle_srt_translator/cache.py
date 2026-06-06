@@ -25,14 +25,15 @@ class LLMResponseCache:
     def get(self, *, model: str, prompt_text: str) -> CachePayload | None:
         """Return a cached payload for the model and prompt text, if present."""
         call_id = self._call_id(model=model, prompt_text=prompt_text)
+        display_key = _short_key(call_id[1])
         if not self.memory.store_backend.contains_item(call_id):
-            logger.debug("LLM cache miss for key %s", call_id[1])
+            logger.debug("LLM cache miss for key %s", display_key)
             return None
 
-        logger.info("Using cached LLM response for key %s", call_id[1])
+        logger.info("Using cached LLM response for key %s", display_key)
         payload = self.memory.store_backend.load_item(call_id, verbose=0)
         if not isinstance(payload, dict):
-            logger.warning("Ignoring invalid cached LLM payload for key %s", call_id[1])
+            logger.warning("Ignoring invalid cached LLM payload for key %s", display_key)
             return None
         return payload
 
@@ -40,7 +41,7 @@ class LLMResponseCache:
         """Store a payload for the model and prompt text."""
         call_id = self._call_id(model=model, prompt_text=prompt_text)
         self.memory.store_backend.dump_item(call_id, payload, verbose=0)
-        logger.debug("Stored LLM response in cache for key %s", call_id[1])
+        logger.debug("Stored LLM response in cache for key %s", _short_key(call_id[1]))
 
     @staticmethod
     def build_key(*, model: str, prompt_text: str) -> str:
@@ -59,3 +60,8 @@ class LLMResponseCache:
             "subtitle_srt_translator.llm_response",
             cls.build_key(model=model, prompt_text=prompt_text),
         )
+
+
+def _short_key(cache_key: str) -> str:
+    """Return a short display form for a cache key."""
+    return f"{cache_key[:5]}..."
