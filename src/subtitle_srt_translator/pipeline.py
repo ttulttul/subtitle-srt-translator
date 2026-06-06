@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections import defaultdict
+from typing import Protocol
 
 from subtitle_srt_translator.chunking import build_overlapping_chunks
 from subtitle_srt_translator.models import (
@@ -17,6 +18,22 @@ from subtitle_srt_translator.models import (
 logger = logging.getLogger(__name__)
 
 
+class TranslationProgress(Protocol):
+    """Progress sink for translation chunk lifecycle events."""
+
+    def initialize(self, total_chunks: int) -> None:
+        """Initialize progress tracking for a translation job."""
+
+    def chunk_started(self, chunk_id: int) -> None:
+        """Mark a chunk as processing."""
+
+    def chunk_completed(self, chunk_id: int) -> None:
+        """Mark a chunk as fully translated."""
+
+    def chunk_conflicted(self, chunk_id: int) -> None:
+        """Mark a chunk as having an unresolved disagreement."""
+
+
 async def translate_subtitles(
     cues: tuple[SubtitleCue, ...],
     translator: SubtitleTranslator,
@@ -27,32 +44,58 @@ async def translate_subtitles(
     overlap: int = 5,
     parallelism: int = 4,
     context_radius: int = 2,
+    progress: TranslationProgress | None = None,
 ) -> dict[int, tuple[str, ...]]:
     """Translate subtitle cues in overlapping chunks and resolve conflicts."""
     if parallelism < 1:
         raise ValueError("parallelism must be at least 1")
 
     chunks = build_overlapping_chunks(cues, chunk_size, overlap)
+    if progress is not None:
+        progress.initialize(len(chunks))
     semaphore = asyncio.Semaphore(parallelism)
+    cue_to_chunk_ids = _map_cues_to_chunks(chunks)
+    candidates_so_far: dict[int, list[TranslationCandidate]] = defaultdict(list)
+    conflicted_cues: set[int] = set()
 
     async def run_chunk(
         chunk_id: int, chunk: tuple[SubtitleCue, ...]
-    ) -> list[TranslationCandidate]:
+    ) -> tuple[int, list[TranslationCandidate]]:
         async with semaphore:
+            if progress is not None:
+                progress.chunk_started(chunk_id)
             request = TranslationRequest(
                 chunk_id=chunk_id,
                 cues=chunk,
                 source_languages=source_languages,
                 target_language=target_language,
             )
-            return await translator.translate_chunk(request)
+            candidates = await translator.translate_chunk(request)
+            return chunk_id, candidates
 
-    chunk_results = await asyncio.gather(
-        *(run_chunk(chunk_id, chunk) for chunk_id, chunk in enumerate(chunks, start=1))
-    )
+    tasks = [
+        asyncio.create_task(run_chunk(chunk_id, chunk))
+        for chunk_id, chunk in enumerate(chunks, start=1)
+    ]
+    chunk_results_by_id: dict[int, list[TranslationCandidate]] = {}
+    for completed_task in asyncio.as_completed(tasks):
+        chunk_id, candidates = await completed_task
+        chunk_results_by_id[chunk_id] = candidates
+        if progress is not None:
+            progress.chunk_completed(chunk_id)
+        new_conflicts = _record_candidates(candidates, candidates_so_far)
+        conflicted_cues.update(new_conflicts)
+        if progress is not None:
+            for cue_index in new_conflicts:
+                for conflict_chunk_id in cue_to_chunk_ids[cue_index]:
+                    progress.chunk_conflicted(conflict_chunk_id)
+
+    chunk_results = [
+        chunk_results_by_id[chunk_id] for chunk_id in range(1, len(chunks) + 1)
+    ]
     candidates = _group_candidates(chunk_results)
     _validate_translation_coverage(cues, candidates)
-    return await _choose_translations(
+    translations = await _choose_translations(
         cues,
         candidates,
         translator,
@@ -61,6 +104,37 @@ async def translate_subtitles(
         context_radius=context_radius,
         parallelism=parallelism,
     )
+    if progress is not None and conflicted_cues:
+        for chunk_id in range(1, len(chunks) + 1):
+            progress.chunk_completed(chunk_id)
+    return translations
+
+
+def _map_cues_to_chunks(
+    chunks: tuple[tuple[SubtitleCue, ...], ...],
+) -> dict[int, set[int]]:
+    """Map cue indexes to the chunks that contain them."""
+    cue_to_chunk_ids: dict[int, set[int]] = defaultdict(set)
+    for chunk_id, chunk in enumerate(chunks, start=1):
+        for cue in chunk:
+            cue_to_chunk_ids[cue.index].add(chunk_id)
+    return cue_to_chunk_ids
+
+
+def _record_candidates(
+    candidates: list[TranslationCandidate],
+    candidates_so_far: dict[int, list[TranslationCandidate]],
+) -> set[int]:
+    """Record candidates and return cue indexes with new disagreements."""
+    conflicts: set[int] = set()
+    for candidate in candidates:
+        existing = candidates_so_far[candidate.cue_index]
+        if any(
+            item.translated_lines != candidate.translated_lines for item in existing
+        ):
+            conflicts.add(candidate.cue_index)
+        existing.append(candidate)
+    return conflicts
 
 
 def _group_candidates(

@@ -39,9 +39,17 @@ Useful options:
 - `--reasoning-effort medium`: Responses API reasoning effort.
 - `--cache-dir .llm-cache`: local `joblib.Memory` cache for LLM responses.
 - `--no-cache`: disable local LLM response caching.
+- `--progress`: suppress normal logs and show a terminal-width chunk status bar.
 - `--verbose`: enable debug logging.
 
 When `--output` is omitted, the translated SRT is written to stdout.
+
+Progress status characters:
+
+- `-`: chunk has not been processed.
+- `o`: chunk is currently being processed.
+- `?`: chunk has at least one unresolved overlap disagreement.
+- `+`: chunk is fully translated.
 
 ## Development
 

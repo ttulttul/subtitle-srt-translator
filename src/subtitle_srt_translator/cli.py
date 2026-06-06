@@ -10,6 +10,7 @@ from pathlib import Path
 from subtitle_srt_translator.env import load_openai_api_key
 from subtitle_srt_translator.openai_client import OpenAISubtitleTranslator
 from subtitle_srt_translator.pipeline import translate_subtitles
+from subtitle_srt_translator.progress import ChunkProgressBar
 from subtitle_srt_translator.srt import read_srt, render_srt, replace_cue_text
 
 logger = logging.getLogger(__name__)
@@ -18,7 +19,7 @@ logger = logging.getLogger(__name__)
 def main() -> None:
     """Run the subtitle translator CLI."""
     args = _parse_args()
-    _configure_logging(args.verbose)
+    _configure_logging(args.verbose, args.progress)
     asyncio.run(_run(args))
 
 
@@ -35,15 +36,21 @@ async def _run(args: argparse.Namespace) -> None:
         cache_dir=args.cache_dir,
         cache_enabled=not args.no_cache,
     )
-    translations = await translate_subtitles(
-        cues,
-        translator,
-        source_languages=tuple(args.source_language),
-        target_language=args.target_language,
-        chunk_size=args.chunk_size,
-        overlap=args.overlap,
-        parallelism=args.parallelism,
-    )
+    progress_bar = ChunkProgressBar() if args.progress else None
+    try:
+        translations = await translate_subtitles(
+            cues,
+            translator,
+            source_languages=tuple(args.source_language),
+            target_language=args.target_language,
+            chunk_size=args.chunk_size,
+            overlap=args.overlap,
+            parallelism=args.parallelism,
+            progress=progress_bar,
+        )
+    finally:
+        if progress_bar is not None:
+            progress_bar.finish()
     output = render_srt(replace_cue_text(cues, translations))
 
     if output_path:
@@ -87,16 +94,30 @@ def _parse_args() -> argparse.Namespace:
         action="store_true",
         help="Disable local LLM response caching.",
     )
+    parser.add_argument(
+        "--progress",
+        action="store_true",
+        help="Suppress logs and show a chunk status progress bar.",
+    )
     parser.add_argument("--verbose", action="store_true")
     return parser.parse_args()
 
 
-def _configure_logging(verbose: bool) -> None:
+def _configure_logging(verbose: bool, progress: bool = False) -> None:
     """Configure process logging."""
     logging.basicConfig(
-        level=logging.DEBUG if verbose else logging.INFO,
+        level=_log_level(verbose, progress),
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
     if not verbose:
         logging.getLogger("httpx").setLevel(logging.WARNING)
         logging.getLogger("openai").setLevel(logging.WARNING)
+
+
+def _log_level(verbose: bool, progress: bool) -> int:
+    """Return the root log level for CLI mode."""
+    if verbose:
+        return logging.DEBUG
+    if progress:
+        return logging.CRITICAL
+    return logging.INFO
