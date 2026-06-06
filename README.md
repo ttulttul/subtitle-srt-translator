@@ -18,7 +18,7 @@ uv sync
 Set `OPENAI_API_KEY` in the environment, in `.env` at the project root, or in `~/.env`.
 
 ```bash
-OPENAI_API_KEY=sk-... uv run subtitle-srt-translator input.srt --target-language English
+OPENAI_API_KEY=<your-openai-api-key> uv run subtitle-srt-translator input.srt --target-language English
 ```
 
 ## Usage
