@@ -38,6 +38,8 @@ Useful options:
 - `--parallelism 4`: maximum concurrent OpenAI requests.
 - `--model gpt-5.4-mini`: model used for translation and conflict resolution.
 - `--reasoning-effort medium`: Responses API reasoning effort.
+- `--cache-dir .llm-cache`: local `joblib.Memory` cache for LLM responses.
+- `--no-cache`: disable local LLM response caching.
 - `--verbose`: enable debug logging.
 
 When `--output` is omitted, the translated SRT is written to stdout.

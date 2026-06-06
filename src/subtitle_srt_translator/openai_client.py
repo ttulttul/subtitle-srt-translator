@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
+from typing import TypeVar
 
 from openai import AsyncOpenAI
+from pydantic import BaseModel
 
+from subtitle_srt_translator.cache import LLMResponseCache
 from subtitle_srt_translator.models import (
     StructuredChunkTranslation,
     StructuredConflictResolution,
@@ -15,6 +19,7 @@ from subtitle_srt_translator.models import (
 )
 
 logger = logging.getLogger(__name__)
+TextFormatT = TypeVar("TextFormatT", bound=BaseModel)
 
 
 class OpenAISubtitleTranslator:
@@ -26,11 +31,14 @@ class OpenAISubtitleTranslator:
         model: str,
         reasoning_effort: str,
         client: AsyncOpenAI | None = None,
+        cache_dir: Path | str = ".llm-cache",
+        cache_enabled: bool = True,
     ) -> None:
         """Initialize the translator."""
         self.model = model
         self.reasoning_effort = reasoning_effort
         self.client = client or AsyncOpenAI()
+        self.cache = LLMResponseCache(cache_dir) if cache_enabled else None
 
     async def translate_chunk(
         self, request: TranslationRequest
@@ -39,28 +47,17 @@ class OpenAISubtitleTranslator:
         logger.info(
             "Translating chunk %d with %d cues", request.chunk_id, len(request.cues)
         )
-        response = await self.client.responses.parse(
-            model=self.model,
-            reasoning={"effort": self.reasoning_effort},
-            input=[
-                {"role": "system", "content": _translation_system_prompt()},
-                {
-                    "role": "user",
-                    "content": _translation_user_prompt(
-                        request.cues,
-                        request.source_languages,
-                        request.target_language,
-                    ),
-                },
-            ],
+        system_prompt = _translation_system_prompt()
+        user_prompt = _translation_user_prompt(
+            request.cues,
+            request.source_languages,
+            request.target_language,
+        )
+        parsed = await self._parse_with_cache(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
             text_format=StructuredChunkTranslation,
         )
-
-        parsed = response.output_parsed
-        if parsed is None:
-            message = f"Model returned no parsed translation for chunk {request.chunk_id}"
-            logger.error(message)
-            raise RuntimeError(message)
 
         return [
             TranslationCandidate(
@@ -85,30 +82,19 @@ class OpenAISubtitleTranslator:
             cue.index,
             len(candidates),
         )
-        response = await self.client.responses.parse(
-            model=self.model,
-            reasoning={"effort": self.reasoning_effort},
-            input=[
-                {"role": "system", "content": _resolution_system_prompt()},
-                {
-                    "role": "user",
-                    "content": _resolution_user_prompt(
-                        cue,
-                        context,
-                        candidates,
-                        source_languages,
-                        target_language,
-                    ),
-                },
-            ],
+        system_prompt = _resolution_system_prompt()
+        user_prompt = _resolution_user_prompt(
+            cue,
+            context,
+            candidates,
+            source_languages,
+            target_language,
+        )
+        parsed = await self._parse_with_cache(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
             text_format=StructuredConflictResolution,
         )
-
-        parsed = response.output_parsed
-        if parsed is None:
-            message = f"Model returned no parsed conflict resolution for cue {cue.index}"
-            logger.error(message)
-            raise RuntimeError(message)
 
         logger.debug(
             "Resolved cue %d using model rationale: %s", cue.index, parsed.rationale
@@ -118,6 +104,44 @@ class OpenAISubtitleTranslator:
             translated_lines=tuple(parsed.chosen_translation),
             chunk_id=-1,
         )
+
+    async def _parse_with_cache(
+        self,
+        *,
+        system_prompt: str,
+        user_prompt: str,
+        text_format: type[TextFormatT],
+    ) -> TextFormatT:
+        """Parse a structured model response, using the local cache when possible."""
+        prompt_text = _cache_prompt_text(system_prompt, user_prompt)
+        if self.cache is not None:
+            cached_payload = self.cache.get(model=self.model, prompt_text=prompt_text)
+            if cached_payload is not None:
+                return text_format.model_validate(cached_payload)
+
+        response = await self.client.responses.parse(
+            model=self.model,
+            reasoning={"effort": self.reasoning_effort},
+            input=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            text_format=text_format,
+        )
+
+        parsed = response.output_parsed
+        if parsed is None:
+            message = "Model returned no parsed structured response"
+            logger.error(message)
+            raise RuntimeError(message)
+
+        if self.cache is not None:
+            self.cache.set(
+                model=self.model,
+                prompt_text=prompt_text,
+                payload=parsed.model_dump(mode="json"),
+            )
+        return parsed
 
 
 def _translation_system_prompt() -> str:
@@ -185,6 +209,18 @@ def _format_languages(source_languages: tuple[str, ...]) -> str:
     if not source_languages:
         return "unknown or mixed languages"
     return ", ".join(source_languages)
+
+
+def _cache_prompt_text(system_prompt: str, user_prompt: str) -> str:
+    """Build the exact prompt text used for cache identity."""
+    return "\n\n".join(
+        [
+            "role: system",
+            system_prompt,
+            "role: user",
+            user_prompt,
+        ]
+    )
 
 
 def _format_cues(cues: tuple[SubtitleCue, ...]) -> str:

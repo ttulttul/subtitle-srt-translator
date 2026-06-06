@@ -32,6 +32,8 @@ async def _run(args: argparse.Namespace) -> None:
     translator = OpenAISubtitleTranslator(
         model=args.model,
         reasoning_effort=args.reasoning_effort,
+        cache_dir=args.cache_dir,
+        cache_enabled=not args.no_cache,
     )
     translations = await translate_subtitles(
         cues,
@@ -75,6 +77,16 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--parallelism", type=int, default=4)
     parser.add_argument("--model", default="gpt-5.4-mini")
     parser.add_argument("--reasoning-effort", default="medium")
+    parser.add_argument(
+        "--cache-dir",
+        default=".llm-cache",
+        help="Directory for cached LLM responses. Enabled by default.",
+    )
+    parser.add_argument(
+        "--no-cache",
+        action="store_true",
+        help="Disable local LLM response caching.",
+    )
     parser.add_argument("--verbose", action="store_true")
     return parser.parse_args()
 
